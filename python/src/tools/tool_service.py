@@ -1,140 +1,29 @@
 """
-Сервис управления инструментами и система разрешений
+Сервис управления инструментами
 """
 import asyncio
-from typing import Dict, Any, Optional, List, Set
-from dataclasses import dataclass, field
-from enum import Enum
+from typing import Dict, Any, Optional, List, Callable
+from datetime import datetime
+import uuid
 
-from . import (
+from .types import (
     BaseTool, ToolInput, ToolOutput, ToolCall, ToolStatus,
-    ToolRegistry, PermissionType, ToolPermission
+    ToolRegistry
 )
+from .permissions import PermissionManager, PermissionRequest, PermissionGrant
 
 
-@dataclass
-class PermissionRequest:
-    """Запрос разрешения на выполнение инструмента"""
-    tool_name: str
-    arguments: Dict[str, Any]
-    correlation_id: str
-    
-    def __str__(self):
-        args_preview = ", ".join(f"{k}={v}" for k, v in list(self.arguments.items())[:3])
-        return f"{self.tool_name}({args_preview})"
-
-
-@dataclass 
-class PermissionGrant:
-    """Результат предоставления разрешения"""
-    granted: bool
-    reason: Optional[str] = None
-    one_time: bool = False  # Одноразовое разрешение
-
-
-class PermissionManager:
-    """
-    Менеджер разрешений для инструментов
-    """
-    
-    _instance: Optional["PermissionManager"] = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._permissions: Dict[str, ToolPermission] = {}
-            cls._instance._granted_once: Set[str] = set()
-        return cls._instance
-    
-    def set_permission(self, permission: ToolPermission):
-        """Установить разрешение для инструмента"""
-        self._permissions[permission.tool_name] = permission
-    
-    def get_permission(self, tool_name: str) -> Optional[ToolPermission]:
-        """Получить разрешение для инструмента"""
-        return self._permissions.get(tool_name)
-    
-    async def check_permission(
-        self, 
-        request: PermissionRequest,
-        user_callback: Optional[callable] = None
-    ) -> PermissionGrant:
-        """
-        Проверить разрешение на выполнение инструмента
-        
-        Args:
-            request: Запрос разрешения
-            user_callback: Callback для запроса у пользователя (async функция)
-        
-        Returns:
-            PermissionGrant с результатом проверки
-        """
-        permission = self.get_permission(request.tool_name)
-        
-        # Если разрешения нет - спрашиваем пользователя
-        if permission is None:
-            if user_callback:
-                granted = await user_callback(request)
-                if granted:
-                    self._granted_once.add(request.correlation_id)
-                return PermissionGrant(granted=granted)
-            else:
-                return PermissionGrant(
-                    granted=False,
-                    reason="Разрешение не настроено и нет callback для запроса"
-                )
-        
-        # Проверка типа разрешения
-        if permission.permission_type == PermissionType.DENY:
-            return PermissionGrant(
-                granted=False,
-                reason="Инструмент запрещен настройками безопасности"
-            )
-        
-        if permission.permission_type == PermissionType.ALWAYS_ALLOW:
-            # Проверка паттернов если есть
-            if permission.patterns:
-                if not self._matches_patterns(request.arguments, permission.patterns):
-                    return PermissionGrant(
-                        granted=False,
-                        reason="Аргументы не соответствуют разрешенным паттернам"
-                    )
-            return PermissionGrant(granted=True)
-        
-        # ASK_USER - спрашиваем пользователя
-        if user_callback:
-            granted = await user_callback(request)
-            if granted:
-                self._granted_once.add(request.correlation_id)
-            return PermissionGrant(granted=granted)
-        else:
-            return PermissionGrant(
-                granted=False,
-                reason="Требуется подтверждение пользователя"
-            )
-    
-    def _matches_patterns(self, arguments: Dict[str, Any], patterns: List[str]) -> bool:
-        """Проверить соответствие аргументов паттернам"""
-        import fnmatch
-        
-        for pattern in patterns:
-            for key, value in arguments.items():
-                if isinstance(value, str):
-                    if fnmatch.fnmatch(value, pattern):
-                        return True
-        return False
-    
-    def clear_grants(self):
-        """Очистить одноразовые разрешения"""
-        self._granted_once.clear()
-
-
-@dataclass
 class ToolServiceConfig:
     """Конфигурация сервиса инструментов"""
-    default_timeout: int = 300
-    max_concurrent_tools: int = 10
-    enable_logging: bool = True
+    def __init__(
+        self,
+        default_timeout: int = 300,
+        max_concurrent_tools: int = 10,
+        enable_logging: bool = True
+    ):
+        self.default_timeout = default_timeout
+        self.max_concurrent_tools = max_concurrent_tools
+        self.enable_logging = enable_logging
 
 
 class ToolService:
@@ -168,7 +57,7 @@ class ToolService:
         tool_name: str,
         arguments: Dict[str, Any],
         correlation_id: Optional[str] = None,
-        user_callback: Optional[callable] = None
+        user_callback: Optional[Callable] = None
     ) -> ToolOutput:
         """
         Выполнить инструмент с проверкой разрешений
@@ -182,9 +71,6 @@ class ToolService:
         Returns:
             ToolOutput с результатом выполнения
         """
-        import uuid
-        from datetime import datetime
-        
         correlation_id = correlation_id or str(uuid.uuid4())
         
         # Получение инструмента
@@ -289,9 +175,6 @@ class ToolService:
 
 
 __all__ = [
-    "PermissionManager",
-    "PermissionRequest",
-    "PermissionGrant",
     "ToolService",
     "ToolServiceConfig"
 ]
